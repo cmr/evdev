@@ -1,3 +1,4 @@
+use std::convert::TryInto;
 use std::fs::{File, OpenOptions};
 use std::mem::MaybeUninit;
 use std::os::unix::io::{AsRawFd, RawFd};
@@ -526,6 +527,86 @@ impl RawDevice {
 
         unsafe { sys::eviocsrep(self.as_raw_fd(), &repeat) }
             .map(|_| ())
+            .map_err(nix_err)
+    }
+
+    /// Retrieve the scancode for a keycode, if any
+    pub fn get_scancode_by_keycode(&self, keycode: u32) -> io::Result<Vec<u8>> {
+        let mut keymap = libc::input_keymap_entry {
+            flags: 0,
+            len: 0,
+            index: 0,
+            keycode,
+            scancode: [0u8; 32],
+        };
+
+        unsafe { sys::eviocgkeycode_v2(self.as_raw_fd(), &mut keymap) }
+            .map(|_| keymap.scancode[..keymap.len as usize].to_vec())
+            .map_err(nix_err)
+    }
+
+    /// Retrieve the keycode and scancode by index, starting at 0
+    pub fn get_scancode_by_index(&self, index: u16) -> io::Result<(u32, Vec<u8>)> {
+        let mut keymap = libc::input_keymap_entry {
+            flags: 1,
+            len: 0,
+            index,
+            keycode: 0,
+            scancode: [0u8; 32],
+        };
+
+        unsafe { sys::eviocgkeycode_v2(self.as_raw_fd(), &mut keymap) }
+            .map(|_| {
+                (
+                    keymap.keycode,
+                    keymap.scancode[..keymap.len as usize].to_vec(),
+                )
+            })
+            .map_err(nix_err)
+    }
+
+    /// Update a scancode by index. The return value is the previous keycode
+    pub fn update_scancode_by_index(
+        &self,
+        index: u16,
+        keycode: u32,
+        scancode: &[u8],
+    ) -> io::Result<u32> {
+        let len = scancode.len() as u8;
+        let mut scancode = scancode.to_vec();
+
+        scancode.resize(32, 0);
+
+        let keymap = libc::input_keymap_entry {
+            flags: 1,
+            len,
+            index,
+            keycode,
+            scancode: scancode.try_into().unwrap(),
+        };
+
+        unsafe { sys::eviocskeycode_v2(self.as_raw_fd(), &keymap) }
+            .map(|keycode| keycode as u32)
+            .map_err(nix_err)
+    }
+
+    /// Update a scancode. The return value is the previous keycode
+    pub fn update_scancode(&self, keycode: u32, scancode: &[u8]) -> io::Result<u32> {
+        let len = scancode.len() as u8;
+        let mut scancode = scancode.to_vec();
+
+        scancode.resize(32, 0);
+
+        let mut keymap = libc::input_keymap_entry {
+            flags: 0,
+            len,
+            index: 0,
+            keycode,
+            scancode: scancode.try_into().unwrap(),
+        };
+
+        unsafe { sys::eviocskeycode_v2(self.as_raw_fd(), &mut keymap) }
+            .map(|keycode| keycode as u32)
             .map_err(nix_err)
     }
 
